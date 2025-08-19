@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CubeScope</title>
+
+    <style>
+      /* === Layout & Typography === */
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+          Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+        color: #fff;
+        background: #111;
+      }
+
+      canvas {
+        display: block;
+      }
+
+      /* === Control Panel === */
+      #controls {
+        position: absolute;
+        top: 15px;
+        left: 15px;
+        padding: 15px;
+        max-width: 360px;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 8px;
+      }
+
+      h1,
+      p,
+      label {
+        margin: 0 0 10px 0;
+      }
+
+      h1 {
+        font-size: 1.5em;
+      }
+
+      p {
+        font-size: 0.9em;
+        color: #ccc;
+      }
+
+      input,
+      button {
+        width: 100%;
+        padding: 8px;
+        margin-bottom: 10px;
+        box-sizing: border-box;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background: #333;
+        color: #fff;
+      }
+
+      input[type="color"] {
+        padding: 4px;
+        min-height: 35px;
+      }
+
+      input[type="range"] {
+        width: 100%;
+      }
+
+      button {
+        cursor: pointer;
+        background: #007bff;
+        border-color: #007bff;
+        font-weight: bold;
+      }
+
+      button:hover {
+        background: #0056b3;
+      }
+
+      #slider-container {
+        display: none; /* toggled in JS */
+      }
+
+      #tip {
+        font-size: 0.8em;
+        color: #aaa;
+        margin-top: -4px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- ===================== Control Panel ===================== -->
+    <div id="controls">
+      <h1>CubeScope</h1>
+      <p>Upload a text file with N×N×N numbers to visualise the cube.</p>
+
+      <label for="file-input">Data File:</label>
+      <input type="file" id="file-input" accept=".txt, .dat" />
+
+      <label for="base-color">Base Colour (max-value):</label>
+      <input type="color" id="base-color" value="#ff0000" />
+
+      <label>
+        <input type="checkbox" id="cross-toggle" /> Enable Cross-Section Mode
+      </label>
+      <p id="tip">
+        In cross-section mode:<br />• Drag sliders to move planes
+        (0 … N).<br />• Click a region to isolate it.
+      </p>
+
+      <div id="slider-container">
+        <label for="plane-x">X-Plane Position:</label>
+        <input type="range" id="plane-x" step="1" min="0" max="1" value="0" />
+
+        <label for="plane-y">Y-Plane Position:</label>
+        <input type="range" id="plane-y" step="1" min="0" max="1" value="0" />
+
+        <label for="plane-z">Z-Plane Position:</label>
+        <input type="range" id="plane-z" step="1" min="0" max="1" value="0" />
+
+        <button id="show-all">Show Full Cube</button>
+      </div>
+
+      <button id="reset-view">Reset View</button>
+    </div>
+
+    <!-- ====================== Three.js App ===================== -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      // ───────────────────────── State ──────────────────────────
+      let scene, camera, renderer, controls, voxelGroup;
+      let lastLoadedData = null;
+      const baseColor = new THREE.Color(0xff0000);
+
+      // Cross-section state
+      let crossSectionEnabled = false;
+      let planeX = 0,
+        planeY = 0,
+        planeZ = 0,
+        cubeSize = 0;
+      const planeFrames = { x: null, y: null, z: null };
+      let selectedOctant = null; // null → show all
+
+      const raycaster = new THREE.Raycaster();
+      const mouseNDC = new THREE.Vector2();
+
+      // ────────────────────── Initialisation ─────────────────────
+      function init() {
+        // Scene & camera
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+
+        camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          1000
+        );
+        camera.position.set(10, 10, 10);
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(20, 30, 10);
+        scene.add(dirLight);
+
+        // Voxel container
+        voxelGroup = new THREE.Group();
+        scene.add(voxelGroup);
+
+        // Orbit controls
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // UI events
+        window.addEventListener("resize", onWindowResize);
+        document
+          .getElementById("file-input")
+          .addEventListener("change", handleFileUpload);
+        document
+          .getElementById("reset-view")
+          .addEventListener("click", () => controls.reset());
+        document
+          .getElementById("base-color")
+          .addEventListener("input", (e) => {
+            baseColor.set(e.target.value);
+            if (lastLoadedData) processVoxelData(lastLoadedData);
+          });
+        document
+          .getElementById("cross-toggle")
+          .addEventListener("change", (e) => toggleCrossSection(e.target.checked));
+        ["plane-x", "plane-y", "plane-z"].forEach((id) =>
+          document.getElementById(id).addEventListener("input", handlePlaneMove)
+        );
+        document
+          .getElementById("show-all")
+          .addEventListener("click", () => {
+            selectedOctant = null;
+            updateVoxelVisibility();
+          });
+
+        renderer.domElement.addEventListener("pointerdown", onPointerDown);
+
+        animate();
+      }
+
+      // ──────────────────────── Handlers ─────────────────────────
+      function handleFileUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          lastLoadedData = ev.target.result;
+          processVoxelData(lastLoadedData);
+        };
+        reader.readAsText(file);
+      }
+
+      function toggleCrossSection(enabled) {
+        crossSectionEnabled = enabled;
+        document.getElementById("slider-container").style.display = enabled
+          ? "block"
+          : "none";
+
+        if (!enabled) {
+          selectedOctant = null;
+          updateVoxelVisibility();
+          showHidePlaneFrames(false);
+        } else {
+          updatePlaneFrames();
+          showHidePlaneFrames(true);
+        }
+      }
+
+      function handlePlaneMove() {
+        planeX = parseInt(document.getElementById("plane-x").value, 10);
+        planeY = parseInt(document.getElementById("plane-y").value, 10);
+        planeZ = parseInt(document.getElementById("plane-z").value, 10);
+        updatePlaneFrames();
+        updateVoxelVisibility();
+      }
+
+      function onPointerDown(event) {
+        if (!crossSectionEnabled) return;
+
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouseNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        raycaster.setFromCamera(mouseNDC, camera);
+        const intersects = raycaster.intersectObjects(voxelGroup.children, false);
+        if (intersects.length) {
+          const g = intersects[0].object.userData.grid;
+          selectedOctant = {
+            x: g.x >= planeX,
+            y: g.y >= planeY,
+            z: g.z >= planeZ,
+          };
+          updateVoxelVisibility();
+        }
+      }
+
+      // ───────────────────── Core visual logic ───────────────────
+      function processVoxelData(raw) {
+        // Clean previous
+        scene.remove(voxelGroup);
+        voxelGroup.clear();
+        scene.remove(...Object.values(planeFrames).filter((m) => m));
+
+        voxelGroup = new THREE.Group();
+        scene.add(voxelGroup);
+
+        const data = raw
+          .trim()
+          .split(/\s+/)
+          .map(Number);
+        if (data.some(isNaN)) return alert("Non-numeric values found");
+
+        const n = Math.cbrt(data.length);
+        if (n % 1 !== 0 || n === 0)
+          return alert(`${data.length} is not a perfect cube`);
+        cubeSize = n;
+
+        // Configure sliders 0 … N
+        ["plane-x", "plane-y", "plane-z"].forEach((id) => {
+          const s = document.getElementById(id);
+          s.min = 0;
+          s.max = n;
+          s.value = Math.floor(n / 2);
+        });
+        planeX = planeY = planeZ = Math.floor(n / 2);
+
+        // Build voxels
+        const dMin = Math.min(...data);
+        const dMax = Math.max(...data);
+        const geom = new THREE.BoxGeometry(1, 1, 1);
+        const white = new THREE.Color(0xffffff);
+
+        for (let i = 0; i < data.length; ++i) {
+          const value = data[i];
+          const t = dMax > dMin ? (value - dMin) / (dMax - dMin) : 1;
+          const colour = new THREE.Color().lerpColors(white, baseColor, t);
+          const mat = new THREE.MeshLambertMaterial({ color: colour });
+          const voxel = new THREE.Mesh(geom, mat);
+
+          const x = i % n;
+          const y = Math.floor(i / n) % n;
+          const z = Math.floor(i / (n * n));
+          voxel.position.set(x - n / 2 + 0.5, y - n / 2 + 0.5, z - n / 2 + 0.5);
+          voxel.userData.grid = { x, y, z };
+          voxelGroup.add(voxel);
+        }
+
+        createPlaneFrames();
+        updatePlaneFrames();
+        selectedOctant = null;
+        updateVoxelVisibility();
+
+        // Fit camera
+        const box = new THREE.Box3().setFromObject(voxelGroup);
+        const size = box.getSize(new THREE.Vector3()).length();
+        const center = box.getCenter(new THREE.Vector3());
+        controls.reset();
+        controls.target.copy(center);
+        camera.position.copy(center).add(new THREE.Vector3(size * 0.8, size * 0.8, size * 0.8));
+        camera.lookAt(center);
+      }
+
+      function updateVoxelVisibility() {
+        voxelGroup.children.forEach((v) => {
+          if (!crossSectionEnabled || !selectedOctant) {
+            v.visible = true;
+            return;
+          }
+          const g = v.userData.grid;
+          const okX = selectedOctant.x ? g.x >= planeX : g.x < planeX;
+          const okY = selectedOctant.y ? g.y >= planeY : g.y < planeY;
+          const okZ = selectedOctant.z ? g.z >= planeZ : g.z < planeZ;
+          v.visible = okX && okY && okZ;
+        });
+      }
+
+      // ───────────────────── Plane helpers ───────────────────────
+      function createPlaneFrames() {
+        const makeFrame = () => {
+          const pg = new THREE.PlaneGeometry(cubeSize, cubeSize);
+          const edges = new THREE.EdgesGeometry(pg);
+          return new THREE.LineSegments(
+            edges,
+            new THREE.LineBasicMaterial({ color: 0xffffff })
+          );
+        };
+
+        planeFrames.x = makeFrame();
+        planeFrames.x.rotation.y = Math.PI / 2;
+
+        planeFrames.y = makeFrame();
+        planeFrames.y.rotation.x = -Math.PI / 2;
+
+        planeFrames.z = makeFrame();
+
+        scene.add(planeFrames.x, planeFrames.y, planeFrames.z);
+      }
+
+      function updatePlaneFrames() {
+        if (!planeFrames.x) return;
+        const offset = -cubeSize / 2 + 0.5;
+        planeFrames.x.position.x = planeX + offset;
+        planeFrames.y.position.y = planeY + offset;
+        planeFrames.z.position.z = planeZ + offset;
+      }
+
+      function showHidePlaneFrames(show) {
+        Object.values(planeFrames).forEach((p) => (p.visible = show));
+      }
+
+      // ───────────────────── Boilerplate ─────────────────────────
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      init();
+    </script>
+  </body>
+</html>
