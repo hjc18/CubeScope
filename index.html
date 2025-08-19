@@ -93,20 +93,23 @@
     <!-- ===================== Control Panel ===================== -->
     <div id="controls">
       <h1>CubeScope</h1>
-      <p>Upload a text file with N×N×N numbers to visualise the cube.</p>
+      <p>Upload a text file with N*N*N space-separated numbers to visualise the cube, or generate random data.</p>
 
       <label for="file-input">Data File:</label>
-      <input type="file" id="file-input" accept=".txt, .dat" />
+      <input type="file" id="file-input" />
 
-      <label for="base-color">Base Colour (max-value):</label>
-      <input type="color" id="base-color" value="#ff0000" />
+      <label for="base-color">Base Color (max-value):</label>
+      <input type="color" id="base-color" value="#3b82f6" />
+
+      <button id="randomize">Random Data</button>
 
       <label>
         <input type="checkbox" id="cross-toggle" /> Enable Cross-Section Mode
       </label>
       <p id="tip">
-        In cross-section mode:<br />• Drag sliders to move planes
-        (0 … N).<br />• Click a region to isolate it.
+        In cross-section mode:
+        <br />• Drag sliders to move planes.
+        <br />• Click a region to isolate it.
       </p>
 
       <div id="slider-container">
@@ -142,7 +145,7 @@
       // ───────────────────────── State ──────────────────────────
       let scene, camera, renderer, controls, voxelGroup;
       let lastLoadedData = null;
-      const baseColor = new THREE.Color(0xff0000);
+      const baseColor = new THREE.Color(0x3b82f6); // nicer default (indigo/blue)
 
       // Cross-section state
       let crossSectionEnabled = false;
@@ -155,6 +158,8 @@
 
       const raycaster = new THREE.Raycaster();
       const mouseNDC = new THREE.Vector2();
+
+      const DEFAULT_N = 16; // side length for random initialisation
 
       // ────────────────────── Initialisation ─────────────────────
       function init() {
@@ -204,6 +209,9 @@
             if (lastLoadedData) processVoxelData(lastLoadedData);
           });
         document
+          .getElementById("randomize")
+          .addEventListener("click", () => randomize());
+        document
           .getElementById("cross-toggle")
           .addEventListener("change", (e) => toggleCrossSection(e.target.checked));
         ["plane-x", "plane-y", "plane-z"].forEach((id) =>
@@ -218,7 +226,18 @@
 
         renderer.domElement.addEventListener("pointerdown", onPointerDown);
 
+        // Initialise with random U(0,1) volume
+        randomize(DEFAULT_N);
+
         animate();
+      }
+
+      // ──────────────────────── Random data ─────────────────────
+      function randomize(n = cubeSize || DEFAULT_N) {
+        const values = new Float32Array(n * n * n);
+        for (let i = 0; i < values.length; ++i) values[i] = Math.random();
+        lastLoadedData = values; // store array (processVoxelData accepts array)
+        processVoxelData(values);
       }
 
       // ──────────────────────── Handlers ─────────────────────────
@@ -288,11 +307,11 @@
         voxelGroup = new THREE.Group();
         scene.add(voxelGroup);
 
-        const data = raw
-          .trim()
-          .split(/\s+/)
-          .map(Number);
-        if (data.some(isNaN)) return alert("Non-numeric values found");
+        // Accept either a string (file) or a typed array (random)
+        const data = Array.isArray(raw) || ArrayBuffer.isView(raw)
+          ? Array.from(raw)
+          : raw.trim().split(/\s+/).map(Number);
+        if (data.some((v) => Number.isNaN(v))) return alert("Non-numeric values found");
 
         const n = Math.cbrt(data.length);
         if (n % 1 !== 0 || n === 0)
