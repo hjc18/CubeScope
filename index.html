@@ -201,7 +201,7 @@
           .addEventListener("change", handleFileUpload);
         document
           .getElementById("reset-view")
-          .addEventListener("click", () => controls.reset());
+          .addEventListener("click", () => resetCamera());
         document
           .getElementById("base-color")
           .addEventListener("input", (e) => {
@@ -350,17 +350,11 @@
 
         createPlaneFrames();
         updatePlaneFrames();
+        showHidePlaneFrames(crossSectionEnabled);
         selectedOctant = null;
         updateVoxelVisibility();
 
-        // Fit camera
-        const box = new THREE.Box3().setFromObject(voxelGroup);
-        const size = box.getSize(new THREE.Vector3()).length();
-        const center = box.getCenter(new THREE.Vector3());
-        controls.reset();
-        controls.target.copy(center);
-        camera.position.copy(center).add(new THREE.Vector3(size * 0.8, size * 0.8, size * 0.8));
-        camera.lookAt(center);
+        resetCamera();
       }
 
       function updateVoxelVisibility() {
@@ -409,6 +403,16 @@
 
       function showHidePlaneFrames(show) {
         Object.values(planeFrames).forEach((p) => (p.visible = show));
+      }
+
+      function resetCamera() {
+        const box = new THREE.Box3().setFromObject(voxelGroup);
+        const size = box.getSize(new THREE.Vector3()).length();
+        const center = box.getCenter(new THREE.Vector3());
+        controls.reset();
+        controls.target.copy(center);
+        camera.position.copy(center).add(new THREE.Vector3(size * 0.8, size * 0.8, size * 0.8));
+        camera.lookAt(center);
       }
 
       // ───────────────────── Boilerplate ─────────────────────────
