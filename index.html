@@ -25,7 +25,7 @@
         top: 15px;
         left: 15px;
         padding: 15px;
-        max-width: 360px;
+        max-width: 380px;
         background: rgba(0, 0, 0, 0.6);
         border-radius: 8px;
       }
@@ -86,6 +86,31 @@
         color: #aaa;
         margin-top: -4px;
       }
+
+      #info-panel {
+        display: grid;
+        grid-template-columns: 60px 1fr;
+        gap: 6px 10px;
+        font-size: 0.85em;
+        color: #ddd;
+        background: rgba(255,255,255,0.05);
+        padding: 8px;
+        border-radius: 6px;
+        margin: 6px 0 12px 0;
+      }
+      #info-panel strong { color: #bbb; font-weight: 600; }
+
+      .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .slider-row input[type="number"] {
+        width: 72px;
+        margin-bottom: 0;
+        padding: 6px 8px;
+        background: #2a2a2a;
+      }      
     </style>
   </head>
 
@@ -95,6 +120,12 @@
       <h1>CubeScope</h1>
       <p>Upload a text file with N*N*N space-separated numbers to visualise the cube, or generate random data.</p>
 
+      <div id="info-panel">
+        <strong>N</strong><span id="info-n">–</span>
+        <strong>Min</strong><span id="info-min">–</span>
+        <strong>Max</strong><span id="info-max">–</span>
+      </div>
+
       <label for="file-input">Data File:</label>
       <input type="file" id="file-input" />
 
@@ -103,8 +134,9 @@
 
       <button id="randomize">Random Data</button>
 
-      <label>
-        <input type="checkbox" id="cross-toggle" /> Enable Cross-Section Mode
+      <label for="cross-toggle" style="display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="cross-toggle" style="width:auto; margin:0;" />
+        <span>Enable Cross-Section Mode</span>
       </label>
       <p id="tip">
         In cross-section mode:
@@ -113,20 +145,29 @@
       </p>
 
       <div id="slider-container">
-        <label for="plane-x">X-Plane Position:</label>
-        <input type="range" id="plane-x" step="1" min="0" max="1" value="0" />
+        <label for="plane-x" style="color:#ff9aa2">X-Plane Position:</label>
+        <div class="slider-row">
+          <input type="range" id="plane-x" step="1" min="0" max="1" value="0" />
+          <input type="number" id="plane-x-val" step="1" min="0" max="1" value="0" />
+        </div>
 
-        <label for="plane-y">Y-Plane Position:</label>
-        <input type="range" id="plane-y" step="1" min="0" max="1" value="0" />
+        <label for="plane-y" style="color:#b5e48c">Y-Plane Position:</label>
+        <div class="slider-row">
+          <input type="range" id="plane-y" step="1" min="0" max="1" value="0" />
+          <input type="number" id="plane-y-val" step="1" min="0" max="1" value="0" />
+        </div>
 
-        <label for="plane-z">Z-Plane Position:</label>
-        <input type="range" id="plane-z" step="1" min="0" max="1" value="0" />
+        <label for="plane-z" style="color:#89c2ff">Z-Plane Position:</label>
+        <div class="slider-row">
+          <input type="range" id="plane-z" step="1" min="0" max="1" value="0" />
+          <input type="number" id="plane-z-val" step="1" min="0" max="1" value="0" />
+        </div>
 
         <button id="show-all">Show Full Cube</button>
       </div>
 
       <button id="reset-view">Reset View</button>
-    </div>
+    </div>    
 
     <!-- ====================== Three.js App ===================== -->
     <script type="importmap">
@@ -150,15 +191,14 @@
       let lastLoadedData = null;
       const baseColor = new THREE.Color(0x3b82f6); // nicer default (indigo/blue)
 
-      // linewidth is in world units relative to screen height
-      const lineMat = new LineMaterial({ color: 0xffffff, linewidth: 3 }); 
+      // individual line materials per plane (light hues)
+      const lineMatX = new LineMaterial({ color: 0xff9aa2, linewidth: 3 }); // light red
+      const lineMatY = new LineMaterial({ color: 0xb5e48c, linewidth: 3 }); // light green
+      const lineMatZ = new LineMaterial({ color: 0x89c2ff, linewidth: 3 }); // light blue
 
       // Cross-section state
       let crossSectionEnabled = false;
-      let planeX = 0,
-        planeY = 0,
-        planeZ = 0,
-        cubeSize = 0;
+      let planeX = 0, planeY = 0, planeZ = 0, cubeSize = 0;
       const planeFrames = { x: null, y: null, z: null };
       let selectedOctant = null; // null → show all
 
@@ -166,6 +206,11 @@
       const mouseNDC = new THREE.Vector2();
 
       const DEFAULT_N = 8; // side length for random initialisation
+
+      // Info panel values
+      let infoN = document.getElementById('info-n');
+      let infoMin = document.getElementById('info-min');
+      let infoMax = document.getElementById('info-max');      
 
       // ────────────────────── Initialisation ─────────────────────
       function init() {
@@ -179,6 +224,8 @@
           0.1,
           1000
         );
+        // Set camera so that +Z is screen up; +X leans left-down, +Y down-right (approx.)
+        camera.up.set(0, 0, 1);
         camera.position.set(10, 10, 10);
 
         // Renderer
@@ -186,6 +233,7 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
+        
         // Lights
         scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -202,33 +250,31 @@
 
         // UI events
         window.addEventListener("resize", onWindowResize);
-        document
-          .getElementById("file-input")
-          .addEventListener("change", handleFileUpload);
-        document
-          .getElementById("reset-view")
-          .addEventListener("click", () => resetCamera());
-        document
-          .getElementById("base-color")
-          .addEventListener("input", (e) => {
-            baseColor.set(e.target.value);
-            if (lastLoadedData) processVoxelData(lastLoadedData);
-          });
-        document
-          .getElementById("randomize")
-          .addEventListener("click", () => randomize());
-        document
-          .getElementById("cross-toggle")
-          .addEventListener("change", (e) => toggleCrossSection(e.target.checked));
-        ["plane-x", "plane-y", "plane-z"].forEach((id) =>
-          document.getElementById(id).addEventListener("input", handlePlaneMove)
-        );
-        document
-          .getElementById("show-all")
-          .addEventListener("click", () => {
-            selectedOctant = null;
-            updateVoxelVisibility();
-          });
+        document.getElementById("file-input").addEventListener("change", handleFileUpload);
+        document.getElementById("reset-view").addEventListener("click", () => resetCamera());
+        document.getElementById("base-color").addEventListener("input", (e) => {
+          baseColor.set(e.target.value);
+          if (lastLoadedData) processVoxelData(lastLoadedData);
+        });
+        document.getElementById("randomize").addEventListener("click", () => randomize());
+        document.getElementById("cross-toggle").addEventListener("change", (e) => toggleCrossSection(e.target.checked));
+
+        // Sliders and numeric inputs (bidirectional)
+        [
+          ['plane-x', 'plane-x-val'],
+          ['plane-y', 'plane-y-val'],
+          ['plane-z', 'plane-z-val'],
+        ].forEach(([rid, nid]) => {
+          const r = document.getElementById(rid);
+          const n = document.getElementById(nid);
+          r.addEventListener('input', () => { n.value = r.value; handlePlaneMove(); });
+          n.addEventListener('input', () => { r.value = n.value; handlePlaneMove(); });
+        });
+
+        document.getElementById("show-all").addEventListener("click", () => {
+          selectedOctant = null;
+          updateVoxelVisibility();
+        });
 
         renderer.domElement.addEventListener("pointerdown", onPointerDown);
 
@@ -261,9 +307,7 @@
 
       function toggleCrossSection(enabled) {
         crossSectionEnabled = enabled;
-        document.getElementById("slider-container").style.display = enabled
-          ? "block"
-          : "none";
+        document.getElementById("slider-container").style.display = enabled ? "block" : "none";
 
         if (!enabled) {
           selectedOctant = null;
@@ -279,6 +323,20 @@
         planeX = parseInt(document.getElementById("plane-x").value, 10);
         planeY = parseInt(document.getElementById("plane-y").value, 10);
         planeZ = parseInt(document.getElementById("plane-z").value, 10);
+        // keep numeric boxes in valid range
+        [
+          ['plane-x', 'plane-x-val', planeX],
+          ['plane-y', 'plane-y-val', planeY],
+          ['plane-z', 'plane-z-val', planeZ],
+        ].forEach(([rid, nid, v]) => {
+          const n = document.getElementById(nid);
+          const r = document.getElementById(rid);
+          const min = parseInt(r.min, 10), max = parseInt(r.max, 10);
+          if (v < min) { v = min; }
+          if (v > max) { v = max; }
+          n.value = v;
+          r.value = v;
+        });
         updatePlaneFrames();
         updateVoxelVisibility();
       }
@@ -320,16 +378,15 @@
         if (data.some((v) => Number.isNaN(v))) return alert("Non-numeric values found");
 
         const n = Math.cbrt(data.length);
-        if (n % 1 !== 0 || n === 0)
-          return alert(`${data.length} is not a perfect cube`);
+        if (n % 1 !== 0 || n === 0) return alert(`${data.length} is not a perfect cube`);
         cubeSize = n;
 
         // Configure sliders 0 … N
         ["plane-x", "plane-y", "plane-z"].forEach((id) => {
-          const s = document.getElementById(id);
-          s.min = 0;
-          s.max = n;
-          s.value = Math.floor(n / 2);
+          const r = document.getElementById(id);
+          const num = document.getElementById(id+"-val");
+          r.min = 0; r.max = n; r.value = Math.floor(n / 2);
+          num.min = 0; num.max = n; num.value = Math.floor(n / 2);
         });
         planeX = planeY = planeZ = Math.floor(n / 2);
 
@@ -354,6 +411,9 @@
           voxelGroup.add(voxel);
         }
 
+        // update info panel
+        updateInfoPanel(n, dMin, dMax);
+
         createPlaneFrames();
         updatePlaneFrames();
         showHidePlaneFrames(crossSectionEnabled);
@@ -361,6 +421,12 @@
         updateVoxelVisibility();
 
         resetCamera();
+      }
+
+      function updateInfoPanel(n, minV, maxV) {
+        infoN.textContent = String(n);
+        infoMin.textContent = `${minV.toFixed(4)}`;
+        infoMax.textContent = `${maxV.toFixed(4)}`;
       }
 
       function updateVoxelVisibility() {
@@ -379,22 +445,20 @@
 
       // ───────────────────── Plane helpers ───────────────────────
       function createPlaneFrames() {
-        const makeFrame = () => {
-          const pg = new THREE.PlaneGeometry(cubeSize*1.1, cubeSize*1.1);
+        const makeFrame = (mat) => {
+          const pg = new THREE.PlaneGeometry(cubeSize * 1.1, cubeSize * 1.1);
           const edges = new THREE.EdgesGeometry(pg);
-          // Convert edges to LineSegments2
           const lineGeom = new LineSegmentsGeometry().fromEdgesGeometry(edges);
-          const thickLines = new LineSegments2(lineGeom, lineMat);
-          return thickLines;
+          return new LineSegments2(lineGeom, mat);
         };
 
-        planeFrames.x = makeFrame();
+        planeFrames.x = makeFrame(lineMatX);
         planeFrames.x.rotation.y = Math.PI / 2;
 
-        planeFrames.y = makeFrame();
+        planeFrames.y = makeFrame(lineMatY);
         planeFrames.y.rotation.x = -Math.PI / 2;
 
-        planeFrames.z = makeFrame();
+        planeFrames.z = makeFrame(lineMatZ);
 
         scene.add(planeFrames.x, planeFrames.y, planeFrames.z);
       }
@@ -426,13 +490,19 @@
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
-        lineMat.resolution.set(window.innerWidth, window.innerHeight);
+        lineMatX.resolution.set(window.innerWidth, window.innerHeight);
+        lineMatY.resolution.set(window.innerWidth, window.innerHeight);
+        lineMatZ.resolution.set(window.innerWidth, window.innerHeight);
       }
 
       function animate() {
         requestAnimationFrame(animate);
         controls.update();
-        lineMat.resolution.set(window.innerWidth, window.innerHeight);
+        lineMatX.resolution.set(window.innerWidth, window.innerHeight);
+        lineMatY.resolution.set(window.innerWidth, window.innerHeight);
+        lineMatZ.resolution.set(window.innerWidth, window.innerHeight);
+
+        // render main scene
         renderer.render(scene, camera);
       }
 
